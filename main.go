@@ -11,6 +11,16 @@ import (
 )
 
 func main() {
+
+	// Prompt to ask for the location of the index file
+	fmt.Println("Welcome to the Rooted Parser!")
+	fmt.Println("This program will parse the index file and the XML files to create a JSON file with the finished records.")
+	fmt.Println("Please ensure that the index file is named 'index_2025.csv' and is located in the same directory as this program.")
+	fmt.Println("The XML files should be located in subdirectories named by their ObjectID.")
+	fmt.Println("The program will process each record in the index file and create a JSON file with the finished records.")
+	fmt.Println("--------------------------------------------------")
+	fmt.Println("Starting to process records...")
+
 	file, err := os.Open("./index_2025.csv")
 	if err != nil {
 		panic(err)
