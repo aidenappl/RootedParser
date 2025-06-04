@@ -309,6 +309,59 @@ func main() {
 			})
 		}
 
+		// Validate people records, check for duplicates and empty names
+		peopleMap := make(map[string]structs.People)
+		for _, person := range fullRecord.People {
+			// Skip if person name is empty
+			if person.PersonName == "" {
+				continue
+			}
+			// Check if the person already exists in the map
+			if existingPerson, exists := peopleMap[person.PersonName]; exists {
+				// If the person already exists, update their details
+				if person.PersonTitle != "" {
+					existingPerson.PersonTitle = person.PersonTitle
+				}
+				if person.PhoneNumber != nil {
+					existingPerson.PhoneNumber = person.PhoneNumber
+				}
+				if person.AverageHours != nil {
+					existingPerson.AverageHours = person.AverageHours
+				}
+				if person.Compensation != nil {
+					existingPerson.Compensation = person.Compensation
+				}
+				if person.Address != nil {
+					existingPerson.Address = person.Address
+				}
+				// Update the map with the existing person
+				peopleMap[person.PersonName] = existingPerson
+			} else {
+				// If the person does not exist, add them to the map
+				peopleMap[person.PersonName] = person
+			}
+		}
+		// Convert the map back to a slice
+		fullRecord.People = make([]structs.People, 0, len(peopleMap))
+		for _, person := range peopleMap {
+			fullRecord.People = append(fullRecord.People, person)
+		}
+
+		// Remove any empty addresses
+		for i := len(fullRecord.People) - 1; i >= 0; i-- {
+			if fullRecord.People[i].Address != nil && fullRecord.People[i].Address.AddressLine1 == "" &&
+				fullRecord.People[i].Address.City == "" &&
+				fullRecord.People[i].Address.State == "" && fullRecord.People[i].Address.ZIPCode == "" {
+				fullRecord.People[i].Address = nil
+			}
+		}
+		// Remove any empty phone numbers
+		for i := len(fullRecord.People) - 1; i >= 0; i-- {
+			if fullRecord.People[i].PhoneNumber != nil && *fullRecord.People[i].PhoneNumber == "" {
+				fullRecord.People[i].PhoneNumber = nil
+			}
+		}
+
 		// Send the full record to the finished records slice
 		finishedRecords = append(finishedRecords, fullRecord)
 
