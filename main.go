@@ -8,17 +8,10 @@ import (
 	"os"
 
 	"github.com/aidenappl/rootedparser/structs"
+	"github.com/schollz/progressbar/v3"
 )
 
 func main() {
-
-	// Prompt to ask for the location of the index file
-	fmt.Println("Welcome to the Rooted Parser!")
-	fmt.Println("This program will parse the index file and the XML files to create a JSON file with the finished records.")
-	fmt.Println("Please ensure that the index file is named 'index_2025.csv' and is located in the same directory as this program.")
-	fmt.Println("The XML files should be located in subdirectories named by their ObjectID.")
-	fmt.Println("The program will process each record in the index file and create a JSON file with the finished records.")
-	fmt.Println("--------------------------------------------------")
 	fmt.Println("Starting to process records...")
 
 	file, err := os.Open("./index_2025.csv")
@@ -34,10 +27,27 @@ func main() {
 	}
 
 	finishedRecords := []structs.FullFilingRecord{}
+	errorLog := make([]string, 0)
+	fmt.Println("Total records to process:", len(records)-1)
+
+	// wait for user input to continue
+	fmt.Println("Press Enter to continue...")
+	var input string
+	fmt.Scanln(&input)
+
+	// check that user pressed enter
+	if input != "" {
+		fmt.Println("Exiting program.")
+		return
+	}
+
+	fmt.Println("Processing records...")
+	fmt.Println()
+	bar := progressbar.Default(int64(len(records) - 1))
 
 	for _, row := range records[1:] {
 
-		fmt.Println("Processing record:", row[5])
+		bar.Add(1)
 
 		wd, err := os.Getwd()
 		if err != nil {
@@ -49,6 +59,7 @@ func main() {
 		xmlFile, err := os.Open(xmlFileName)
 		if err != nil {
 			fmt.Printf("Error opening XML file %s: %v\n", xmlFileName, err)
+			errorLog = append(errorLog, fmt.Sprintf("Error opening XML file %s: %v", xmlFileName, err))
 			continue
 		}
 
@@ -59,6 +70,7 @@ func main() {
 		err = decoder.Decode(&returnData)
 		if err != nil {
 			fmt.Printf("Error decoding XML file %s: %v\n", xmlFileName, err)
+			errorLog = append(errorLog, fmt.Sprintf("Error decoding XML file %s: %v", xmlFileName, err))
 			continue
 		}
 
@@ -74,10 +86,38 @@ func main() {
 				State:        returnData.ReturnHeader.Filer.USAddress.StateAbbreviationCd,
 				ZIPCode:      returnData.ReturnHeader.Filer.USAddress.ZIPCd,
 			},
-			Officers: []structs.Officer{},
+			People: []structs.People{},
 		}
+		// -
+		// Checking if the returnData has the IRS990 Attached
+		// Handling 990 data
+		// -
+		if returnData.ReturnData.IRS990 != nil {
+			if returnData.ReturnData.IRS990.People != nil {
+				for _, person := range returnData.ReturnData.IRS990.People {
+					fullRecord.People = append(fullRecord.People, structs.People{
+						PersonName:   person.Name,
+						PersonTitle:  person.Title,
+						AverageHours: &person.AverageHoursPerWeek,
+						Compensation: &person.CompFromOrg,
+					})
+				}
+			}
 
-		if returnData.ReturnData.IRS990.FormationYear != 0 {
+			// Adding the principal officer from the return header to the people slice
+			fullRecord.People = append(fullRecord.People, structs.People{
+				PersonName:  returnData.ReturnHeader.BusinessOfficerGrp[0].PersonNm,
+				PersonTitle: returnData.ReturnHeader.BusinessOfficerGrp[0].PersonTitleTxt,
+				PhoneNumber: &returnData.ReturnHeader.BusinessOfficerGrp[0].PhoneNum,
+				Address: &structs.Address{
+					AddressLine1: returnData.ReturnHeader.Filer.USAddress.AddressLine1Txt,
+					City:         returnData.ReturnHeader.Filer.USAddress.CityNm,
+					State:        returnData.ReturnHeader.Filer.USAddress.StateAbbreviationCd,
+					ZIPCode:      returnData.ReturnHeader.Filer.USAddress.ZIPCd,
+				},
+			})
+
+			// Adding the IRS990 data to the fullRecord
 			fullRecord.Form990 = &structs.IRSForm990{
 				PrincipalOfficerName: returnData.ReturnHeader.BusinessOfficerGrp[0].PersonNm,
 				PrincipalOfficerAddress: structs.Address{
@@ -95,40 +135,203 @@ func main() {
 			}
 		}
 
-		if returnData.ReturnData.IRS990EZ.GrossReceiptsAmt != 0 {
+		// -
+		// Checking if the returnData has the IRS990EZ Attached
+		// Handling 990EZ data
+		// -
+
+		if returnData.ReturnData.IRS990EZ != nil {
 			fullRecord.Form990EZ = &structs.IRS990EZ{
 				GrossReceiptsAmt:          returnData.ReturnData.IRS990EZ.GrossReceiptsAmt,
 				TotalRevenueAmt:           returnData.ReturnData.IRS990EZ.TotalRevenueAmt,
 				TotalExpensesAmt:          returnData.ReturnData.IRS990EZ.TotalExpensesAmt,
 				ExcessOrDeficitForYearAmt: returnData.ReturnData.IRS990EZ.ExcessOrDeficitForYearAmt,
 				PrimaryExemptPurpose:      returnData.ReturnData.IRS990EZ.PrimaryExemptPurpose,
-				President:                 returnData.ReturnData.IRS990EZ.President,
+				Website:                   returnData.ReturnData.IRS990EZ.Website,
+			}
 
-				PresidentHours: returnData.ReturnData.IRS990EZ.PresidentHours,
-				Website:        returnData.ReturnData.IRS990EZ.Website,
-				LocationCity:   returnData.ReturnData.IRS990EZ.LocationCity,
-				LocationState:  returnData.ReturnData.IRS990EZ.LocationState,
+			// Add bookkeeper information to the people slice
+			if returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.PersonName != "" {
+				//  Check if person is already added to avoid duplicates
+				alreadyExists := false
+				for idx, person := range fullRecord.People {
+					if person.PersonName == returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.PersonName {
+						alreadyExists = true
+						// Update existing person's details
+						fullRecord.People[idx].Address = &structs.Address{
+							AddressLine1: returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.Address.AddressLine1Txt,
+							City:         returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.Address.CityNm,
+							State:        returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.Address.StateAbbreviationCd,
+							ZIPCode:      returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.Address.ZIPCd,
+						}
+						fullRecord.People[idx].Bookkeeper = true
+						fullRecord.People[idx].PhoneNumber = &returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.PhoneNumber
+						break
+					}
+				}
+				if !alreadyExists {
+					if returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.Address != nil && returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.Address.AddressLine1Txt != "" {
+						fullRecord.People = append(fullRecord.People, structs.People{
+							PersonName: returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.PersonName,
+							Address: &structs.Address{
+								AddressLine1: returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.Address.AddressLine1Txt,
+								City:         returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.Address.CityNm,
+								State:        returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.Address.StateAbbreviationCd,
+								ZIPCode:      returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.Address.ZIPCd,
+							},
+							Bookkeeper:  true,
+							PhoneNumber: &returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.PhoneNumber,
+						})
+					} else {
+						fullRecord.People = append(fullRecord.People, structs.People{
+							PersonName:  returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.PersonName,
+							Bookkeeper:  true,
+							PhoneNumber: &returnData.ReturnData.IRS990EZ.BooksInCareOfDetail.PhoneNumber,
+						})
+					}
+
+				}
+			}
+
+			// Adding the officers from the IRS990EZ to the people slice
+			if len(returnData.ReturnData.IRS990EZ.OfficerDirectorTrusteeEmplGrp) != 0 {
+				for _, officer := range returnData.ReturnData.IRS990EZ.OfficerDirectorTrusteeEmplGrp {
+					// check if person is already added to avoid duplicates
+					alreadyExists := false
+					for idx, person := range fullRecord.People {
+						if person.PersonName == officer.Name {
+							// If the person already exists, update their compensation and average hours
+							fullRecord.People[idx].Compensation = &officer.Compensation
+							fullRecord.People[idx].AverageHours = &officer.AverageHoursPerWk
+							fullRecord.People[idx].PersonTitle = officer.Title
+							if officer.Address != nil {
+								fullRecord.People[idx].Address = &structs.Address{
+									AddressLine1: officer.Address.AddressLine1Txt,
+									City:         officer.Address.CityNm,
+									State:        officer.Address.StateAbbreviationCd,
+									ZIPCode:      officer.Address.ZIPCd,
+								}
+							}
+							alreadyExists = true
+							break
+						}
+					}
+					if !alreadyExists {
+						fullRecord.People = append(fullRecord.People, structs.People{
+							PersonName:   officer.Name,
+							PersonTitle:  officer.Title,
+							AverageHours: &officer.AverageHoursPerWk,
+							Compensation: &officer.Compensation,
+						})
+					}
+				}
 			}
 		}
 
-		// Add officers from the XML data
+		// -
+		// Checking if the returnData has the IRS990PF Attached
+		// Handling 990PF data
+		// -
+		if returnData.ReturnData.IRS990PF != nil && len(returnData.ReturnData.IRS990PF.Officers) > 0 {
+			for _, pfOfficer := range returnData.ReturnData.IRS990PF.Officers {
+
+				// check if person is already added to avoid duplicates
+				alreadyExists := false
+				for idx, person := range fullRecord.People {
+					if person.PersonName == pfOfficer.Name {
+						alreadyExists = true
+						// Update existing person's details
+						fullRecord.People[idx].AverageHours = &pfOfficer.AverageHoursPerWk
+						fullRecord.People[idx].Compensation = &pfOfficer.Compensation
+						if pfOfficer.Address != nil {
+							fullRecord.People[idx].Address = &structs.Address{
+								AddressLine1: pfOfficer.Address.AddressLine1Txt,
+								City:         pfOfficer.Address.CityNm,
+								State:        pfOfficer.Address.StateAbbreviationCd,
+								ZIPCode:      pfOfficer.Address.ZIPCd,
+							}
+						}
+						break
+					}
+				}
+				if alreadyExists {
+					continue
+				}
+
+				// check if the officer has a valid address
+				if pfOfficer.Address != nil && pfOfficer.Address.AddressLine1Txt != "" {
+					fullRecord.People = append(fullRecord.People, structs.People{
+						PersonName:   pfOfficer.Name,
+						PersonTitle:  pfOfficer.Title,
+						AverageHours: &pfOfficer.AverageHoursPerWk,
+						Compensation: &pfOfficer.Compensation,
+						Address: &structs.Address{
+							AddressLine1: pfOfficer.Address.AddressLine1Txt,
+							City:         pfOfficer.Address.CityNm,
+							State:        pfOfficer.Address.StateAbbreviationCd,
+							ZIPCode:      pfOfficer.Address.ZIPCd,
+						},
+					})
+				} else {
+					fullRecord.People = append(fullRecord.People, structs.People{
+						PersonName:   pfOfficer.Name,
+						PersonTitle:  pfOfficer.Title,
+						AverageHours: &pfOfficer.AverageHoursPerWk,
+						Compensation: &pfOfficer.Compensation,
+					})
+				}
+			}
+		}
+
+		// -
+		// Checking if the returnData has the Business Officer Groups Attached
+		// Handling Business Officer Group data
+		// -
 		for _, officer := range returnData.ReturnHeader.BusinessOfficerGrp {
-			fullRecord.Officers = append(fullRecord.Officers, structs.Officer{
-				PersonName:                 officer.PersonNm,
-				PersonTitle:                officer.PersonTitleTxt,
-				PhoneNumber:                officer.PhoneNum,
-				SignatureDate:              officer.SignatureDt,
-				DiscussWithPaidPreparerInd: officer.DiscussWithPaidPreparerInd,
+			//  check if person is already added to avoid duplicates
+			alreadyExists := false
+			for idx, person := range fullRecord.People {
+				if person.PersonName == officer.PersonNm {
+					// Update existing person's details
+					fullRecord.People[idx].PersonTitle = officer.PersonTitleTxt
+					fullRecord.People[idx].PhoneNumber = &officer.PhoneNum
+					alreadyExists = true
+					break
+				}
+			}
+			if alreadyExists {
+				continue
+			}
+			fullRecord.People = append(fullRecord.People, structs.People{
+				PersonName:  officer.PersonNm,
+				PersonTitle: officer.PersonTitleTxt,
+				PhoneNumber: &officer.PhoneNum,
 			})
 		}
 
+		// Send the full record to the finished records slice
 		finishedRecords = append(finishedRecords, fullRecord)
 
 		xmlFile.Close()
-		fmt.Println("Finished processing record:", row[0])
-		fmt.Println("--------------------------------------------------")
 	}
 
+	// Log errors if any
+	if len(errorLog) > 0 {
+		fmt.Println("Errors encountered during processing:")
+		outputErrFile, err := os.Create("error_log.txt")
+		if err != nil {
+			panic(err)
+		}
+		defer outputErrFile.Close()
+		for _, errMsg := range errorLog {
+			fmt.Println(errMsg)
+			_, err := outputErrFile.WriteString(errMsg + "\n")
+			if err != nil {
+				panic(err)
+			}
+		}
+		fmt.Println("Error log saved to error_log.txt")
+	}
 	outputFile, err := os.Create("finished_records.json")
 	if err != nil {
 		panic(err)
@@ -139,9 +342,15 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	fmt.Println()
 	fmt.Println("Finished records saved to finished_records.json")
 	fmt.Println("All records processed successfully.")
+	fmt.Println()
+	fmt.Println("Records requested:", len(records)-1)
 	fmt.Println("Total records processed:", len(finishedRecords))
+	fmt.Println("Total errors encountered:", len(errorLog))
+	fmt.Println("Success rate: ", float64(len(finishedRecords))/float64(len(records)-1)*100, "%")
+	fmt.Println()
 	fmt.Println("Exiting program.")
 	fmt.Println("Goodbye!")
 	fmt.Println("--------------------------------------------------")
