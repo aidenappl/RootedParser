@@ -43,17 +43,18 @@ func main() {
 
 	fmt.Println("Processing records...")
 	fmt.Println()
+
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
 	bar := progressbar.Default(int64(len(records) - 1))
 
 	for _, row := range records[1:] {
 
 		bar.Add(1)
-
-		wd, err := os.Getwd()
-		if err != nil {
-			fmt.Println("Error:", err)
-			return
-		}
 
 		xmlFileName := fmt.Sprintf("%s/%s/%s_public.xml", wd, row[9], row[8])
 		xmlFile, err := os.Open(xmlFileName)
@@ -63,14 +64,13 @@ func main() {
 			continue
 		}
 
-		defer xmlFile.Close()
-
 		var returnData structs.Return
 		decoder := xml.NewDecoder(xmlFile)
 		err = decoder.Decode(&returnData)
 		if err != nil {
 			fmt.Printf("Error decoding XML file %s: %v\n", xmlFileName, err)
 			errorLog = append(errorLog, fmt.Sprintf("Error decoding XML file %s: %v", xmlFileName, err))
+			xmlFile.Close()
 			continue
 		}
 
@@ -365,7 +365,9 @@ func main() {
 		// Send the full record to the finished records slice
 		finishedRecords = append(finishedRecords, fullRecord)
 
-		xmlFile.Close()
+		if err := xmlFile.Close(); err != nil {
+			errorLog = append(errorLog, fmt.Sprintf("Error closing XML file %s: %v", xmlFileName, err))
+		}
 	}
 
 	// Log errors if any
